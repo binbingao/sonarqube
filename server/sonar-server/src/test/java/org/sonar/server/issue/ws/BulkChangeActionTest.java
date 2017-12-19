@@ -21,6 +21,7 @@ package org.sonar.server.issue.ws;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -62,7 +63,9 @@ import org.sonar.server.issue.workflow.IssueWorkflow;
 import org.sonar.server.notification.NotificationManager;
 import org.sonar.server.organization.DefaultOrganizationProvider;
 import org.sonar.server.organization.TestDefaultOrganizationProvider;
-import org.sonar.server.qualitygate.changeevent.IssueChangeTrigger;
+import org.sonar.server.qualitygate.changeevent.QGChangeEvent;
+import org.sonar.server.qualitygate.changeevent.QGChangeEventFactory;
+import org.sonar.server.qualitygate.changeevent.QGChangeEventListeners;
 import org.sonar.server.rule.DefaultRuleFinder;
 import org.sonar.server.tester.UserSessionRule;
 import org.sonar.server.ws.TestRequest;
@@ -76,7 +79,9 @@ import static java.util.Collections.singletonList;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.eq;
+import static org.mockito.Matchers.same;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyZeroInteractions;
@@ -120,7 +125,8 @@ public class BulkChangeActionTest {
   private IssueStorage issueStorage = new ServerIssueStorage(system2, new DefaultRuleFinder(dbClient, defaultOrganizationProvider), dbClient,
     new IssueIndexer(es.client(), dbClient, new IssueIteratorFactory(dbClient)));
   private NotificationManager notificationManager = mock(NotificationManager.class);
-  private IssueChangeTrigger issueChangeTrigger = mock(IssueChangeTrigger.class);
+  private QGChangeEventFactory qgChangeEventFactory = mock(QGChangeEventFactory.class);
+  private QGChangeEventListeners qgChangeEventListeners = mock(QGChangeEventListeners.class);
   private List<Action> actions = new ArrayList<>();
 
   private RuleDto rule;
@@ -129,10 +135,11 @@ public class BulkChangeActionTest {
   private ComponentDto file;
   private UserDto user;
 
-  private WsActionTester tester = new WsActionTester(new BulkChangeAction(system2, userSession, dbClient, issueStorage, notificationManager, actions, issueChangeTrigger));
+  private WsActionTester tester = new WsActionTester(
+    new BulkChangeAction(system2, userSession, dbClient, issueStorage, notificationManager, actions, qgChangeEventFactory, qgChangeEventListeners));
 
   @Before
-  public void setUp() throws Exception {
+  public void setUp() {
     issueWorkflow.start();
     rule = db.rules().insertRule(newRuleDto());
     organization = db.organizations().insert();
@@ -144,7 +151,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void set_type() throws Exception {
+  public void set_type() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     IssueDto issueDto = db.issues().insertIssue(newUnresolvedIssue().setType(BUG));
 
@@ -162,7 +169,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void set_severity() throws Exception {
+  public void set_severity() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     IssueDto issueDto = db.issues().insertIssue(newUnresolvedIssue().setSeverity(MAJOR));
 
@@ -176,11 +183,11 @@ public class BulkChangeActionTest {
     assertThat(reloaded.getSeverity()).isEqualTo(MINOR);
     assertThat(reloaded.getUpdatedAt()).isEqualTo(NOW);
 
-    verifyZeroInteractions(issueChangeTrigger);
+    verifyZeroInteractions(qgChangeEventFactory);
   }
 
   @Test
-  public void add_tags() throws Exception {
+  public void add_tags() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     IssueDto issueDto = db.issues().insertIssue(newUnresolvedIssue().setTags(asList("tag1", "tag2")));
 
@@ -194,11 +201,11 @@ public class BulkChangeActionTest {
     assertThat(reloaded.getTags()).containsOnly("tag1", "tag2", "tag3");
     assertThat(reloaded.getUpdatedAt()).isEqualTo(NOW);
 
-    verifyZeroInteractions(issueChangeTrigger);
+    verifyZeroInteractions(qgChangeEventFactory);
   }
 
   @Test
-  public void remove_assignee() throws Exception {
+  public void remove_assignee() {
     setUserProjectPermissions(USER);
     IssueDto issueDto = db.issues().insertIssue(newUnresolvedIssue().setAssignee("arthur"));
 
@@ -212,11 +219,11 @@ public class BulkChangeActionTest {
     assertThat(reloaded.getAssignee()).isNull();
     assertThat(reloaded.getUpdatedAt()).isEqualTo(NOW);
 
-    verifyZeroInteractions(issueChangeTrigger);
+    verifyZeroInteractions(qgChangeEventFactory);
   }
 
   @Test
-  public void bulk_change_with_comment() throws Exception {
+  public void bulk_change_with_comment() {
     setUserProjectPermissions(USER);
     IssueDto issueDto = db.issues().insertIssue(newUnresolvedIssue().setType(BUG));
 
@@ -235,7 +242,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void bulk_change_many_issues() throws Exception {
+  public void bulk_change_many_issues() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     UserDto userToAssign = db.users().insertUser("arthur");
     db.organizations().addMember(organization, user);
@@ -263,7 +270,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void send_notification() throws Exception {
+  public void send_notification() {
     setUserProjectPermissions(USER);
     IssueDto issueDto = db.issues().insertIssue(newUnresolvedIssue().setType(BUG));
 
@@ -289,7 +296,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void send_notification_on_branch() throws Exception {
+  public void send_notification_on_branch() {
     setUserProjectPermissions(USER);
 
     String branchName = "feature1";
@@ -319,7 +326,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void send_notification_only_on_changed_issues() throws Exception {
+  public void send_notification_only_on_changed_issues() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     IssueDto issue1 = db.issues().insertIssue(newUnresolvedIssue().setType(BUG));
     IssueDto issue2 = db.issues().insertIssue(newUnresolvedIssue().setType(BUG));
@@ -341,7 +348,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void ignore_issues_when_condition_does_not_match() throws Exception {
+  public void ignore_issues_when_condition_does_not_match() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     IssueDto issue1 = db.issues().insertIssue(newUnresolvedIssue().setType(BUG));
     // These 2 issues will be ignored as they are resolved, changing type is not possible
@@ -365,7 +372,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void ignore_issues_when_there_is_nothing_to_do() throws Exception {
+  public void ignore_issues_when_there_is_nothing_to_do() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     IssueDto issue1 = db.issues().insertIssue(newUnresolvedIssue().setType(BUG).setSeverity(MINOR));
     // These 2 issues will be ignored as there's nothing to do
@@ -389,7 +396,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void add_comment_only_on_changed_issues() throws Exception {
+  public void add_comment_only_on_changed_issues() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     IssueDto issue1 = db.issues().insertIssue(newUnresolvedIssue().setType(BUG).setSeverity(MINOR));
     // These 2 issues will be ignored as there's nothing to do
@@ -411,7 +418,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void issues_on_which_user_has_not_browse_permission_are_ignored() throws Exception {
+  public void issues_on_which_user_has_not_browse_permission_are_ignored() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     ComponentDto anotherProject = db.components().insertPrivateProject();
     ComponentDto anotherFile = db.components().insertComponent(newFileDto(anotherProject));
@@ -437,7 +444,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void does_not_update_type_when_no_issue_admin_permission() throws Exception {
+  public void does_not_update_type_when_no_issue_admin_permission() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     ComponentDto anotherProject = db.components().insertPrivateProject();
     ComponentDto anotherFile = db.components().insertComponent(newFileDto(anotherProject));
@@ -463,7 +470,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void does_not_update_severity_when_no_issue_admin_permission() throws Exception {
+  public void does_not_update_severity_when_no_issue_admin_permission() {
     setUserProjectPermissions(USER, ISSUE_ADMIN);
     ComponentDto anotherProject = db.components().insertPrivateProject();
     ComponentDto anotherFile = db.components().insertComponent(newFileDto(anotherProject));
@@ -489,7 +496,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void fail_when_only_comment_action() throws Exception {
+  public void fail_when_only_comment_action() {
     setUserProjectPermissions(USER);
     IssueDto issueDto = db.issues().insertIssue(newUnresolvedIssue().setType(BUG));
     expectedException.expectMessage("At least one action must be provided");
@@ -502,7 +509,7 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void fail_when_number_of_issues_is_more_than_500() throws Exception {
+  public void fail_when_number_of_issues_is_more_than_500() {
     userSession.logIn("john");
     expectedException.expectMessage("Number of issues is limited to 500");
     expectedException.expect(IllegalArgumentException.class);
@@ -514,14 +521,14 @@ public class BulkChangeActionTest {
   }
 
   @Test
-  public void fail_when_not_authenticated() throws Exception {
+  public void fail_when_not_authenticated() {
     expectedException.expect(UnauthorizedException.class);
 
     call(builder().setIssues(singletonList("ABCD")).build());
   }
 
   @Test
-  public void test_definition() throws Exception {
+  public void test_definition() {
     WebService.Action action = tester.getDef();
     assertThat(action.key()).isEqualTo("bulk_change");
     assertThat(action.isPost()).isTrue();
@@ -533,18 +540,23 @@ public class BulkChangeActionTest {
   private void verifyIssueChangeWebhookCalled(@Nullable RuleType expectedRuleType, @Nullable String transitionKey,
     String[] componentUUids,
     IssueDto... issueDtos) {
-    ArgumentCaptor<IssueChangeTrigger.IssueChangeData> issueChangeDataCaptor = ArgumentCaptor.forClass(IssueChangeTrigger.IssueChangeData.class);
-    verify(issueChangeTrigger).onChange(
-      issueChangeDataCaptor.capture(),
-      eq(new IssueChangeTrigger.IssueChange(expectedRuleType, transitionKey)),
-      eq(IssueChangeContext.createUser(new Date(NOW), userSession.getLogin())));
-    IssueChangeTrigger.IssueChangeData issueChangeData = issueChangeDataCaptor.getValue();
+    ArgumentCaptor<QGChangeEventFactory.IssueChangeData> issueChangeDataCaptor = ArgumentCaptor.forClass(QGChangeEventFactory.IssueChangeData.class);
+    QGChangeEventFactory.IssueChange issueChange = new QGChangeEventFactory.IssueChange(expectedRuleType, transitionKey);
+    IssueChangeContext user = IssueChangeContext.createUser(new Date(NOW), userSession.getLogin());
+    List<QGChangeEvent> changeEvents = Collections.singletonList(mock(QGChangeEvent.class));
+    when(qgChangeEventFactory.from(any(QGChangeEventFactory.IssueChangeData.class), eq(issueChange), eq(user))).thenReturn(changeEvents);
+
+    verify(qgChangeEventFactory).from(issueChangeDataCaptor.capture(), eq(issueChange), eq(user));
+
+    QGChangeEventFactory.IssueChangeData issueChangeData = issueChangeDataCaptor.getValue();
     assertThat(issueChangeData.getIssues())
       .extracting(DefaultIssue::key)
       .containsOnly(Arrays.stream(issueDtos).map(IssueDto::getKey).toArray(String[]::new));
     assertThat(issueChangeData.getComponents())
       .extracting(ComponentDto::uuid)
       .containsOnly(componentUUids);
+
+    verify(qgChangeEventListeners).broadcastOnIssueChange(same(issueChangeData), same(changeEvents));
   }
 
   private BulkChangeWsResponse call(BulkChangeRequest bulkChangeRequest) {

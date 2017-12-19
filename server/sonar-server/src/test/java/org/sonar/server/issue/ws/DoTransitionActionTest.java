@@ -58,7 +58,8 @@ import org.sonar.server.issue.workflow.IssueWorkflow;
 import org.sonar.server.notification.NotificationManager;
 import org.sonar.server.organization.DefaultOrganizationProvider;
 import org.sonar.server.organization.TestDefaultOrganizationProvider;
-import org.sonar.server.qualitygate.changeevent.IssueChangeTrigger;
+import org.sonar.server.qualitygate.changeevent.QGChangeEventFactory;
+import org.sonar.server.qualitygate.changeevent.QGChangeEventListeners;
 import org.sonar.server.rule.DefaultRuleFinder;
 import org.sonar.server.tester.UserSessionRule;
 import org.sonar.server.ws.TestRequest;
@@ -113,10 +114,11 @@ public class DoTransitionActionTest {
   private ComponentDto project;
   private ComponentDto file;
   private ArgumentCaptor<SearchResponseData> preloadedSearchResponseDataCaptor = ArgumentCaptor.forClass(SearchResponseData.class);
-  private IssueChangeTrigger issueChangeTrigger = mock(IssueChangeTrigger.class);
+  private QGChangeEventFactory qgChangeEventFactory = mock(QGChangeEventFactory.class);
+  private QGChangeEventListeners qgChangeEventListeners = mock(QGChangeEventListeners.class);
 
   private WsAction underTest = new DoTransitionAction(dbClient, userSession, new IssueFinder(dbClient, userSession), issueUpdater, transitionService, responseWriter, system2,
-    issueChangeTrigger);
+    qgChangeEventFactory, qgChangeEventListeners);
   private WsActionTester tester = new WsActionTester(underTest);
 
   @Before
@@ -127,7 +129,7 @@ public class DoTransitionActionTest {
   }
 
   @Test
-  public void do_transition() throws Exception {
+  public void do_transition() {
     long now = 999_776_888L;
     when(system2.now()).thenReturn(now);
     IssueDto issueDto = issueDbTester.insertIssue(newIssue().setStatus(STATUS_OPEN).setResolution(null));
@@ -140,12 +142,12 @@ public class DoTransitionActionTest {
     IssueDto issueReloaded = dbClient.issueDao().selectByKey(dbTester.getSession(), issueDto.getKey()).get();
     assertThat(issueReloaded.getStatus()).isEqualTo(STATUS_CONFIRMED);
 
-    ArgumentCaptor<IssueChangeTrigger.IssueChangeData> issueChangeDataCaptor = ArgumentCaptor.forClass(IssueChangeTrigger.IssueChangeData.class);
-    verify(issueChangeTrigger).onChange(
+    ArgumentCaptor<QGChangeEventFactory.IssueChangeData> issueChangeDataCaptor = ArgumentCaptor.forClass(QGChangeEventFactory.IssueChangeData.class);
+    verify(qgChangeEventFactory).from(
       issueChangeDataCaptor.capture(),
-      eq(new IssueChangeTrigger.IssueChange(null, "confirm")),
+      eq(new QGChangeEventFactory.IssueChange(null, "confirm")),
       eq(IssueChangeContext.createUser(new Date(now), userSession.getLogin())));
-    IssueChangeTrigger.IssueChangeData issueChangeData = issueChangeDataCaptor.getValue();
+    QGChangeEventFactory.IssueChangeData issueChangeData = issueChangeDataCaptor.getValue();
     assertThat(issueChangeData.getIssues())
       .extracting(DefaultIssue::key)
       .containsOnly(issueDto.getKey());
@@ -155,7 +157,7 @@ public class DoTransitionActionTest {
   }
 
   @Test
-  public void fail_if_issue_does_not_exist() throws Exception {
+  public void fail_if_issue_does_not_exist() {
     userSession.logIn("john");
 
     expectedException.expect(NotFoundException.class);
@@ -163,7 +165,7 @@ public class DoTransitionActionTest {
   }
 
   @Test
-  public void fail_if_no_issue_param() throws Exception {
+  public void fail_if_no_issue_param() {
     userSession.logIn("john");
 
     expectedException.expect(IllegalArgumentException.class);
@@ -171,7 +173,7 @@ public class DoTransitionActionTest {
   }
 
   @Test
-  public void fail_if_no_transition_param() throws Exception {
+  public void fail_if_no_transition_param() {
     IssueDto issueDto = issueDbTester.insertIssue(newIssue().setStatus(STATUS_OPEN).setResolution(null));
     userSession.logIn("john").addProjectPermission(USER, project, file);
 
@@ -180,7 +182,7 @@ public class DoTransitionActionTest {
   }
 
   @Test
-  public void fail_if_not_enough_permission_to_access_issue() throws Exception {
+  public void fail_if_not_enough_permission_to_access_issue() {
     IssueDto issueDto = issueDbTester.insertIssue(newIssue().setStatus(STATUS_OPEN).setResolution(null));
     userSession.logIn("john").addProjectPermission(CODEVIEWER, project, file);
 
@@ -189,7 +191,7 @@ public class DoTransitionActionTest {
   }
 
   @Test
-  public void fail_if_not_enough_permission_to_apply_transition() throws Exception {
+  public void fail_if_not_enough_permission_to_apply_transition() {
     IssueDto issueDto = issueDbTester.insertIssue(newIssue().setStatus(STATUS_OPEN).setResolution(null));
     userSession.logIn("john").addProjectPermission(USER, project, file);
 
@@ -199,7 +201,7 @@ public class DoTransitionActionTest {
   }
 
   @Test
-  public void fail_if_not_authenticated() throws Exception {
+  public void fail_if_not_authenticated() {
     expectedException.expect(UnauthorizedException.class);
     call("ISSUE_KEY", "confirm");
   }
